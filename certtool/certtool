@@ -1,0 +1,193 @@
+#!/bin/bash
+#
+#    CertTool: Tool for managing a certificate store
+#    Copyright (C) 2012 Nicolas Limage
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+OPENSSL='openssl'
+CERT_KEYLENGTH='2048'
+CERT_DAYS='365'
+CA_PATH='/etc/ssl/certs'
+
+umask 077
+
+case "$1" in
+	'newclient')
+		DIR="$2"
+		if ! (echo "$DIR" | grep -q '^[a-zA-Z0-9_-]\+$'); then echo "error: invalid client name"; exit 1; fi
+		if [ -d "$DIR" ]; then echo "error: directory already exists"; exit 1; fi
+		mkdir "./$DIR"
+		;;
+	'genkey')
+		CLIENT_DIR="$2"
+		if [ ! -d "$CLIENT_DIR" ]; then echo "error: directory '$CLIENT_DIR' does not exist"; exit 1; fi
+		if [ "x$3" = "x" ]; then echo "error: usage: $0 $1 <client> <hostname> [server|client|email]"; exit 1; fi
+		CNAME="$3"
+		$OPENSSL req -nodes -newkey "rsa:$CERT_KEYLENGTH" -keyout "$CLIENT_DIR/$CNAME.key" -out "$CLIENT_DIR/$CNAME.req"
+		;;
+	'genreq')
+		CLIENT_DIR="$2"
+		if [ ! -d "$CLIENT_DIR" ]; then echo "error: directory '$CLIENT_DIR' does not exist"; exit 1; fi
+		if [ "x$3" = "x" ]; then echo "error: usage: $0 $1 <client> <hostname>"; exit 1; fi
+		CNAME="$3"
+		$OPENSSL req -nodes -new -key "$CLIENT_DIR/$CNAME.key" -out "$CLIENT_DIR/$CNAME.req"
+		;;
+	'certinfo')
+		if [ "x$3" = "x" ]; then echo "error: usage: $0 $1 <client> <cert>"; exit 1; fi
+		CLIENT_DIR="$2"
+		if [ ! -d "$CLIENT_DIR" ]; then echo "error: directory '$CLIENT_DIR' does not exist"; exit 1; fi
+		CNAME="$3"
+
+		$OPENSSL x509 -in "$CLIENT_DIR/$CNAME.crt" -text -noout
+		;;
+	'pfxinfo')
+		if [ "x$3" = "x" ]; then echo "error: usage: $0 $1 <client> <cert>"; exit 1; fi
+		CLIENT_DIR="$2"
+		if [ ! -d "$CLIENT_DIR" ]; then echo "error: directory '$CLIENT_DIR' does not exist"; exit 1; fi
+		CNAME="$3"
+
+		$OPENSSL pkcs12 -info -in "$CLIENT_DIR/$CNAME.pfx" -nodes
+		;;
+	'p12info')
+		if [ "x$3" = "x" ]; then echo "error: usage: $0 $1 <client> <cert>"; exit 1; fi
+		CLIENT_DIR="$2"
+		if [ ! -d "$CLIENT_DIR" ]; then echo "error: directory '$CLIENT_DIR' does not exist"; exit 1; fi
+		CNAME="$3"
+
+		$OPENSSL pkcs12 -info -in "$CLIENT_DIR/$CNAME.p12" -nodes
+		;;
+	'pfx'|'pkcs12'|'p12')
+		if [ -z "$3" ]; then echo "error: usage: $0 $1 <client> <hostname> [<friendly name>]"; exit 1; fi
+		CLIENT_DIR="$2"
+		if [ ! -d "$CLIENT_DIR" ]; then echo "error: directory '$CLIENT_DIR' does not exist"; exit 1; fi
+		CNAME="$3"
+
+		case "$1" in
+			'pfx')
+				EXT="pfx"
+			;;
+			*)
+				EXT="p12"
+			;;
+		esac
+
+		ARGS=""
+
+		if [ -f "$CLIENT_DIR/$CNAME.chain" ]; then
+				ARGS="$ARGS -CApath $CA_PATH -CAfile $CLIENT_DIR/$CNAME.chain"
+		fi
+
+		$OPENSSL pkcs12 -export -chain -out "$CLIENT_DIR/$CNAME.$EXT" -inkey "$CLIENT_DIR/$CNAME.key" -in "$CLIENT_DIR/$CNAME.crt" -name "$4" $ARGS
+	;;
+	'verify')
+		shift
+		echo "-------------------------------"
+		echo " checking certificate validity"
+		echo "-------------------------------"
+		$0 verifycert $@
+		echo "----------------------------------------"
+		echo " checking certificate/key/request match"
+		echo "----------------------------------------"
+		$0 verifymatch $@
+		echo "----------------------------------------"
+		echo " displaying certificate expiration "
+		echo "----------------------------------------"
+		$0 certinfo $@ | grep -A 2 Validity | sed 's/ */ /'
+	;;
+	'verifycert')
+		if [ -z "$3" ]; then echo "error: usage: $0 $1 <client> <hostname>"; exit 1; fi
+		CLIENT_DIR="$2"
+		if [ ! -d "$CLIENT_DIR" ]; then echo "error: directory '$CLIENT_DIR' does not exist"; exit 1; fi
+		CNAME="$3"
+		if [ -e "$CLIENT_DIR/$CNAME.chain" ]; then
+				$OPENSSL verify -CApath "$CA_PATH" -CAfile "$CLIENT_DIR/$CNAME.chain" "$CLIENT_DIR/$CNAME.crt"
+		else
+				$OPENSSL verify -CApath "$CA_PATH" "$CLIENT_DIR/$CNAME.crt"
+		fi
+	;;
+	'verifymatch')
+		if [ -z "$3" ]; then echo "error: usage: $0 $1 <client> <hostname>"; exit 1; fi
+		CLIENT_DIR="$2"
+		if [ ! -d "$CLIENT_DIR" ]; then echo "error: directory '$CLIENT_DIR' does not exist"; exit 1; fi
+		CNAME="$3"
+		if [ ! -e "$CLIENT_DIR/$CNAME.key" ]; then echo "key not found"; exit 1; fi
+		KEYMOD=`$OPENSSL rsa -noout -modulus -in "$CLIENT_DIR/$CNAME.key" | $OPENSSL md5`
+		if [ ! -e "$CLIENT_DIR/$CNAME.crt" ];
+		then
+				echo "certificate not found";
+		else
+				CRTMOD=`$OPENSSL x509 -noout -modulus -in "$CLIENT_DIR/$CNAME.crt" | $OPENSSL md5`
+				if [ "$CRTMOD" = "$KEYMOD" ]; then
+					echo "OK: Key and cert matching"
+				else
+					echo "Key and cert NOT matching"
+					exit 1
+				fi
+		fi
+		if [ ! -e "$CLIENT_DIR/$CNAME.req" ];
+		then
+				echo "request file not found";
+		else
+				CRTMOD=`$OPENSSL req -noout -modulus -in "$CLIENT_DIR/$CNAME.req" | $OPENSSL md5`
+				if [ "$CRTMOD" = "$KEYMOD" ]; then
+					echo "OK: Key and request matching"
+				else
+					echo "Key and cert NOT matching"
+					exit 1
+				fi
+		fi
+	;;
+	'expiration')
+		if [ -z "$3" ]; then echo "error: usage: $0 $1 <client> <hostname>"; exit 1; fi
+		CLIENT_DIR="$2"
+		if [ ! -d "$CLIENT_DIR" ]; then echo "error: directory '$CLIENT_DIR' does not exist"; exit 1; fi
+		CNAME="$3"
+		if [ ! -e "$CLIENT_DIR/$CNAME.crt" ]; then echo "certificate not found"; exit 1; fi
+		$OPENSSL x509 -in "$CLIENT_DIR/$CNAME.crt" -noout -enddate | sed 's/notAfter=//'
+	;;
+	*)
+		echo "usage: $0 <command> <args>"
+		echo
+		echo "commands: 
+
+	Client Creation
+	---------------
+	newclient    (creates a new client directory)
+
+	Certificates Creation & Renewal
+	-------------------------------
+	genkey       (generate a new key)
+	genreq       (generate a new request for an existing key)
+
+	Certificate Verification
+	------------------------
+	certinfo     (show certificate infos)
+	verify       (checks certificate validity, match, and displays expiration info)
+	verifycert   (verifies a certificate against system CA + chain)
+	verifymatch  (check that private key + certificate + request are matching)
+	expiration   (show certificate validity dates)
+
+	Certificates alternate exports formats
+	--------------------------------------
+	pkcs12       (exports key+crt to pkcs12 format, .p12 extension)
+	p12info      (show certificate .p12 bundle content)
+	pfx          (exports key+crt to pkcs12 format, .pfx extension, for IIS)
+	pfxinfo      (show certificate .pfx bundle content)
+
+
+		"
+		;;
+esac

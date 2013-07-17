@@ -1,0 +1,146 @@
+#!/bin/sh
+#
+#    CATool: Tool for managing a simple local certification authority
+#    Copyright (C) 2013 Nicolas Limage
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+OPENSSL='openssl'
+CA_DIR='./CA'
+CA_KEY="$CA_DIR/ca.key"
+CA_CERT="$CA_DIR/ca.crt"
+CA_DAYS='3650'
+CERT_DAYS='730'
+CERT_KEYLENGTH='2048'
+CERT_DIR='./ca-signed'
+
+umask 077
+
+case "$1" in
+	'newca')
+		if [ ! -d $CA_DIR ]; then mkdir -p $CA_DIR; fi
+		if [ -f "$CA_KEY" -o -f "$CA_CERT" ]; then echo "error: $CA_KEY or $CA_CERT already exists"; exit 1; fi
+		$OPENSSL genrsa -aes256 -out $CA_KEY $CERT_KEYLENGTH
+		$OPENSSL req -new -key $CA_KEY -x509 -days $CA_DAYS -out $CA_CERT
+		$OPENSSL x509 -fingerprint -noout -in $CA_CERT
+		;;
+	'showca')
+		$OPENSSL x509 -in $CA_CERT -noout -text
+		;;
+	'gencert')
+		if [ ! -d "$CERT_DIR" ]; then mkdir -p "$CERT_DIR"; fi
+		if [ "x$2" = "x" ]; then echo "error: usage: $0 $1 <hostname> [server|client|email]"; exit 1; fi
+		CNAME="$2"
+		$OPENSSL req -nodes -days "$CERT_DAYS" -subj "/C=FR/L=Paris/O=Online SAS/OU=/CN=$CNAME" -newkey "rsa:$CERT_KEYLENGTH" -keyout "$CERT_DIR/$CNAME.key" -out "$CERT_DIR/$CNAME.req"
+		if [ -n "$3" ]; then
+			case "$3" in
+				'server')
+					trust="serverAuth"
+				;;
+				'client')
+					trust="clientAuth"
+				;;
+				'email')
+					trust="emailProtection"
+				;;
+				*)
+					echo "error: usage: $0 $1 <hostname> [server|client|email]"
+					exit 1
+				;;
+			esac
+			$OPENSSL x509 -req -days "$CERT_DAYS" -in "$CERT_DIR/$CNAME.req" -CA "$CA_CERT" -CAkey "$CA_KEY" -CAcreateserial -out "$CERT_DIR/$CNAME.crt" -clrtrust -addtrust "$trust"
+			$0 pem "$2"
+		else
+			$OPENSSL x509 -req -days "$CERT_DAYS" -in "$CERT_DIR/$CNAME.req" -CA "$CA_CERT" -CAkey "$CA_KEY" -CAcreateserial -out "$CERT_DIR/$CNAME.crt"
+		fi
+		;;
+	'renewcert')
+		if [ ! -d "$CERT_DIR" ]; then mkdir -p "$CERT_DIR"; fi
+		if [ "x$2" = "x" ]; then echo "error: usage: $0 $1 <hostname> [server|client|email]"; exit 1; fi
+		CNAME="$2"
+		if [ -n "$3" ]; then
+			case "$3" in
+				'server')
+					trust="serverAuth"
+				;;
+				'client')
+					trust="clientAuth"
+				;;
+				'email')
+					trust="emailProtection"
+				;;
+				*)
+					echo "error: usage: $0 $1 <hostname> [server|client|email]"
+					exit 1
+				;;
+			esac
+			$OPENSSL x509 -req -days "$CERT_DAYS" -in "$CERT_DIR/$CNAME.req" -CA "$CA_CERT" -CAkey "$CA_KEY" -CAcreateserial -out "$CERT_DIR/$CNAME.crt" -clrtrust -addtrust "$trust"
+		else
+			$OPENSSL x509 -req -days "$CERT_DAYS" -in "$CERT_DIR/$CNAME.req" -CA "$CA_CERT" -CAkey "$CA_KEY" -CAcreateserial -out "$CERT_DIR/$CNAME.crt" -clrtrust -addtrust serverAuth
+		fi
+		;;
+	'showcert')
+		if [ "x$2" = "x" ]; then echo "error: usage: $0 $1 <cert>"; exit 1; fi
+		CNAME="$2"
+		$OPENSSL x509 -in "$CERT_DIR/$CNAME.crt" -text -noout
+		;;
+	'pkcs12')
+		if [ "x$2" = "x" ]; then echo "error: usage: $0 $1 <hostname> [friendly-name]"; exit 1; fi
+		CNAME="$2"
+		FNAME="$3"
+		if [ -n "$3" ]; then
+			$OPENSSL pkcs12 -export -out "$CERT_DIR/$CNAME.p12" -inkey "$CERT_DIR/$CNAME.key" -in "$CERT_DIR/$CNAME.crt" -name "$FNAME"
+		else
+			$OPENSSL pkcs12 -export -out "$CERT_DIR/$CNAME.p12" -inkey "$CERT_DIR/$CNAME.key" -in "$CERT_DIR/$CNAME.crt"
+		fi
+		;;
+	'der')
+		if [ "x$2" = "x" ]; then echo "error: usage: $0 $1 <hostname>"; exit 1; fi
+		CNAME="$2"
+		$OPENSSL x509 -outform der -out "$CERT_DIR/$CNAME.crt.der" -in  "$CERT_DIR/$CNAME.crt"
+		$OPENSSL rsa -outform der -out "$CERT_DIR/$CNAME.key.der" -in  "$CERT_DIR/$CNAME.key"
+		;;
+	'pem')
+		if [ "x$2" = "x" ]; then echo "error: usage: $0 $1 <hostname>"; exit 1; fi
+		CNAME="$2"
+		$OPENSSL x509 -outform pem -in "$CERT_DIR/$CNAME.crt" > "$CERT_DIR/$CNAME.pem"
+		$OPENSSL rsa -outform pem -in "$CERT_DIR/$CNAME.key" >> "$CERT_DIR/$CNAME.pem"
+		;;
+	*)
+		echo "usage: $0 <command> <args>"
+		echo
+		echo "commands: 
+
+	Certificates Creation & Renewal
+	-------------------------------
+	gencert      (generate certificate and signs it with CA)
+	renewcert    (re-generate a certificate for an existing key/req)
+	showcert     (show certificate infos)
+
+	Certificates alternate exports formats
+	--------------------------------------
+	pkcs12       (exports key+crt to pkcs12 format)
+	der          (exports key+crt to der format)
+	pem          (exports key+crt to pem format)
+
+	CA Creation
+	-----------
+	newca        (creates a new CA)
+	showca       (show current CA infos)
+
+
+		"
+		;;
+esac
