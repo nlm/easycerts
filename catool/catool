@@ -17,6 +17,21 @@
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+############################################################
+# SUBJECT INFOS
+
+# Country
+C="FR"
+# Location (City)
+L="Paris"
+# Organization
+O="My Company"
+# Organizational Unit
+OU=""
+
+############################################################
+# CONFIG
+
 OPENSSL='openssl'
 CA_DIR='./CA'
 CA_KEY="$CA_DIR/ca.key"
@@ -25,6 +40,8 @@ CA_DAYS='3650'
 CERT_DAYS='730'
 CERT_KEYLENGTH='2048'
 CERT_DIR='./ca-signed'
+
+############################################################
 
 umask 077
 
@@ -43,7 +60,7 @@ case "$1" in
 		if [ ! -d "$CERT_DIR" ]; then mkdir -p "$CERT_DIR"; fi
 		if [ "x$2" = "x" ]; then echo "error: usage: $0 $1 <hostname> [server|client|email]"; exit 1; fi
 		CNAME="$2"
-		$OPENSSL req -nodes -days "$CERT_DAYS" -subj "/C=FR/L=Paris/O=Online SAS/OU=/CN=$CNAME" -newkey "rsa:$CERT_KEYLENGTH" -keyout "$CERT_DIR/$CNAME.key" -out "$CERT_DIR/$CNAME.req"
+		$OPENSSL req -nodes -days "$CERT_DAYS" -subj "/C=$C/L=$L/O=$O/OU=$OU/CN=$CNAME" -newkey "rsa:$CERT_KEYLENGTH" -keyout "$CERT_DIR/$CNAME.key" -out "$CERT_DIR/$CNAME.req"
 		if [ -n "$3" ]; then
 			case "$3" in
 				'server')
